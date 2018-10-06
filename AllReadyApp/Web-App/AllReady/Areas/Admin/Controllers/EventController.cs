@@ -30,20 +30,32 @@ namespace AllReady.Areas.Admin.Controllers
         private readonly IMediator _mediator;
         private readonly IValidateEventEditViewModels _eventEditViewModelValidator;
         private readonly IUserAuthorizationService _userAuthorizationService;
+        private readonly IImageSizeValidator _imageSizeValidator;
 
-        public EventController(IImageService imageService, IMediator mediator, IValidateEventEditViewModels eventEditViewModelValidator, IUserAuthorizationService userAuthorizationService)
+        public EventController(IImageService imageService,
+            IMediator mediator,
+            IValidateEventEditViewModels eventEditViewModelValidator,
+            IUserAuthorizationService userAuthorizationService,
+            IImageSizeValidator imageSizeValidator)
         {
             _imageService = imageService;
             _mediator = mediator;
             _eventEditViewModelValidator = eventEditViewModelValidator;
             _userAuthorizationService = userAuthorizationService;
+            _imageSizeValidator = imageSizeValidator;
         }
 
         [HttpGet]
         [Route("Admin/Event/ListAll")]
         public async Task<IActionResult> Lister()
         {
-            var viewModel = await _mediator.SendAsync(new EventListerQuery { UserId = _userAuthorizationService.AssociatedUserId });
+            var viewModel =
+                await _mediator.SendAsync(new EventListerQuery { UserId = _userAuthorizationService.AssociatedUserId });
+
+            if (viewModel.Count == 1 && viewModel.First().Events.Count == 1)
+            {
+                return Redirect(Url.Action("Details", "Event", new { id = viewModel.First().Events.First().EventId }));
+            }
 
             return View(viewModel);
         }
@@ -67,7 +79,7 @@ namespace AllReady.Areas.Admin.Controllers
             }
 
             // todo - check if the user can duplicate (e.g. create events) against the campaign as well - depends on having an authorizable campaign class first
-            
+
             if (await authorizableEvent.UserCanDelete())
             {
                 viewModel.ShowDeleteButton = true;
@@ -101,7 +113,9 @@ namespace AllReady.Areas.Admin.Controllers
                 OrganizationId = campaign.OrganizationId,
                 OrganizationName = campaign.OrganizationName,
                 StartDateTime = DateTimeTodayDate(),
-                EndDateTime = DateTimeTodayDate()
+                EndDateTime = DateTimeTodayDate(),
+                CampaignStartDateTime = campaign.StartDate,
+                CampaignEndDateTime = campaign.EndDate
             };
 
             return View("Edit", viewModel);
@@ -134,6 +148,13 @@ namespace AllReady.Areas.Admin.Controllers
                     if (!fileUpload.IsAcceptableImageContentType())
                     {
                         ModelState.AddModelError(nameof(eventEditViewModel.ImageUrl), "You must upload a valid image file for the logo (.jpg, .png, .gif)");
+                        return View("Edit", eventEditViewModel);
+                    }
+
+
+                    if (_imageSizeValidator != null && fileUpload.Length > _imageSizeValidator.FileSizeInBytes)
+                    {
+                        ModelState.AddModelError(nameof(eventEditViewModel.ImageUrl), $"File size must be less than {_imageSizeValidator.BytesToMb():#,##0.00}MB!");
                         return View("Edit", eventEditViewModel);
                     }
                 }
@@ -182,7 +203,7 @@ namespace AllReady.Areas.Admin.Controllers
             {
                 return BadRequest();
             }
-            
+
             var authorizableEvent = await _mediator.SendAsync(new AuthorizableEventQuery(eventEditViewModel.Id));
             if (!await authorizableEvent.UserCanEdit())
             {
@@ -198,23 +219,27 @@ namespace AllReady.Areas.Admin.Controllers
             {
                 if (fileUpload != null)
                 {
-                    if (fileUpload.IsAcceptableImageContentType())
-                    {
-                        var existingImageUrl = eventEditViewModel.ImageUrl;
-                        var newImageUrl = await _imageService.UploadEventImageAsync(campaign.OrganizationId, eventEditViewModel.Id, fileUpload);
-                        if (!string.IsNullOrEmpty(newImageUrl))
-                        {
-                            eventEditViewModel.ImageUrl = newImageUrl;
-                            if (existingImageUrl != null && existingImageUrl != newImageUrl)
-                            {
-                                await _imageService.DeleteImageAsync(existingImageUrl);
-                            }
-                        }
-                    }
-                    else
+                    if (!fileUpload.IsAcceptableImageContentType())
                     {
                         ModelState.AddModelError(nameof(eventEditViewModel.ImageUrl), "You must upload a valid image file for the logo (.jpg, .png, .gif)");
                         return View(eventEditViewModel);
+                    }
+
+                    if (_imageSizeValidator != null && fileUpload.Length > _imageSizeValidator.FileSizeInBytes)
+                    {
+                        ModelState.AddModelError(nameof(eventEditViewModel.ImageUrl), $"File size must be less than {_imageSizeValidator.BytesToMb():#,##0.00}MB!");
+                        return View("Edit", eventEditViewModel);
+                    }
+
+                    var existingImageUrl = eventEditViewModel.ImageUrl;
+                    var newImageUrl = await _imageService.UploadEventImageAsync(campaign.OrganizationId, eventEditViewModel.Id, fileUpload);
+                    if (!string.IsNullOrEmpty(newImageUrl))
+                    {
+                        eventEditViewModel.ImageUrl = newImageUrl;
+                        if (existingImageUrl != null && existingImageUrl != newImageUrl)
+                        {
+                            await _imageService.DeleteImageAsync(existingImageUrl);
+                        }
                     }
                 }
 
